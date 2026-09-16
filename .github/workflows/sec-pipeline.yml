@@ -65,7 +65,7 @@ jobs:
         run: |
           mkdir -p build
           cd build
-          cmake -G Ninja ..
+          cmake -G Ninja -DPICO_SDK_FETCH_FROM_GIT=ON ..
 
       - name: Build firmware
         run: |
