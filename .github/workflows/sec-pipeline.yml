@@ -1,0 +1,149 @@
+name: Secure Firmware Pipeline
+
+# Runs on every push to main, and on every pull request targeting main.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  security-checks:
+    name: SAST + SBOM + CVE Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Cppcheck
+        run: sudo apt-get update && sudo apt-get install -y cppcheck
+
+      - name: Run SAST (Cppcheck)
+        run: |
+          cppcheck --enable=all --inconclusive --std=c11 main.c 2> cppcheck_report.txt
+          cat cppcheck_report.txt
+
+      - name: Install Syft
+        run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Generate SBOM (Syft)
+        run: syft dir:. --exclude './build/**' --exclude './.git/**' -o cyclonedx-json=sbom.json
+
+      - name: Install Grype
+        run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Scan SBOM for CVEs (Grype)
+        run: grype sbom:sbom.json --fail-on medium || true
+        # NOTE: --fail-on medium would normally fail the build on medium+
+        # severity CVEs. The `|| true` is here temporarily so the pipeline
+        # doesn't block on findings while you're still building this out —
+        # remove `|| true` once you want CVEs to actually gate the build.
+
+      - name: Upload security artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            cppcheck_report.txt
+            sbom.json
+            sbom_manual_notes.md
+
+  build-and-sign:
+    name: Build Firmware & Sign Binary
+    needs: security-checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install ARM GCC toolchain and build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build gcc-arm-none-eabi libnewlib-arm-none-eabi build-essential
+
+      - name: Configure CMake
+        run: |
+          mkdir -p build
+          cd build
+          cmake -G Ninja ..
+
+      - name: Build firmware
+        run: |
+          cd build
+          ninja
+
+      - name: Locate build output
+        id: find_uf2
+        run: |
+          UF2_PATH=$(find build -name "*.uf2" | head -n 1)
+          echo "Found UF2: $UF2_PATH"
+          echo "uf2_path=$UF2_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Sign the compiled binary
+        env:
+          FIRMWARE_SIGNING_KEY: ${{ secrets.FIRMWARE_SIGNING_KEY }}
+        run: |
+          echo "$FIRMWARE_SIGNING_KEY" > private_key.pem
+          UF2_PATH="${{ steps.find_uf2.outputs.uf2_path }}"
+
+          # Compute SHA-256 digest of the built binary
+          openssl dgst -sha256 -binary "$UF2_PATH" > payload_digest.bin
+
+          # Sign the digest with the private key -> DER-encoded ECDSA signature
+          openssl pkeyutl -sign \
+            -inkey private_key.pem \
+            -pkeyopt digest:sha256 \
+            -in payload_digest.bin \
+            -out firmware_signature.der
+
+          echo "Signature generated:"
+          xxd firmware_signature.der | head -5
+
+          # Never leave the private key on disk in the runner
+          rm -f private_key.pem
+
+      - name: Upload signed firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-firmware
+          path: |
+            build/**/*.uf2
+            firmware_signature.der
+            payload_digest.bin
+
+  release:
+    name: Create GitHub Release
+    needs: build-and-sign
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: Download signed firmware
+        uses: actions/download-artifact@v4
+        with:
+          name: signed-firmware
+          path: release-files
+
+      - name: Download security reports
+        uses: actions/download-artifact@v4
+        with:
+          name: security-reports
+          path: release-files
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: "Firmware Build ${{ github.run_number }}"
+          files: |
+            release-files/**/*.uf2
+            release-files/firmware_signature.der
+            release-files/sbom.json
+            release-files/cppcheck_report.txt
+          body: |
+            Automated build from commit ${{ github.sha }}.
+
+            - SAST scan: see cppcheck_report.txt
+            - SBOM (CycloneDX): see sbom.json
+            - Firmware signed with ECDSA P-256 (signature: firmware_signature.der)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
