@@ -1,72 +1,78 @@
 #include <stdio.h>
-#include <stdbool.h>
 #include "pico/stdlib.h"
+
+/* Mbed TLS Headers */
+#include "mbedtls/pk.h"
+#include "mbedtls/ecdsa.h"
+#include "mbedtls/error.h"
+
+/* Local Header files containing keys, signatures, and payloads */
 #include "public_key.h"
+#include "signature.h"
+#include "payload.h"
 
-typedef struct {
-    uint32_t magic_bytes;
-    uint32_t payload_length;
-    uint8_t signature[64];
-} firmware_header_t;
-
-bool verify_firmware_signature(
-    const firmware_header_t *header,
-    const uint8_t *payload
-) {
-    printf("\n[SECURE BOOT] Executing Hardware Root of Trust check...\n");
-    printf("[SECURE BOOT] Verifying header magic bytes: 0x%08X\n", header->magic_bytes);
+static void boot_failed_halt(const char *reason, int err_code) {
+    char err_buf[128];
+    mbedtls_strerror(err_code, err_buf, sizeof(err_buf));
+    printf("\n[CRITICAL ERROR] %s: %s (-0x%04x)\n", reason, err_buf, -err_code);
+    printf("[SECURE BOOT] Boot execution aborted. Device locked.\n");
     
-    if (header->magic_bytes != 0xDEADBEEF) {
-        printf("[ERROR] Malformed firmware header! Invalid magic bytes.\n");
-        return false;
+    /* Hardware Execution Trap: Infinite Halt Loop */
+    while (1) {
+        tight_loop_contents();
     }
-    printf("[SECURE BOOT] Header is valid! Extracted payload length: %u bytes\n", header->payload_length);
-    printf("[SECURE BOOT] Embedded Public Key array size: %zu bytes\n", sizeof(public_key_h));
-
-    if (sizeof(public_key_h) > 0 && header->payload_length > 0) {
-        printf("[SECURE BOOT] SHA-256 Digest calculated.\n");
-        printf("[SECURE BOOT] Signature check against public_key.h: VERIFIED (ECDSA secp256r1)\n");
-        return true;
-    }
-
-    printf("[CRITICAL] Cryptographic verification failed! Untrusted signature.\n");
-    return false;
 }
 
 int main() {
     stdio_init_all();
-
+    
     while (!stdio_usb_connected()) {
         sleep_ms(100);
     }
-
-    printf("\n========================================================\n");
-    printf("  Raspberry Pi Pico 2 W (RP2350) Secure Firmware Boot   \n");
-    printf("========================================================\n");
-
-    firmware_header_t valid_header = {
-        .magic_bytes = 0xDEADBEEF,
-        .payload_length = 512,   
-        .signature = {0x01}
-    };
-
-    uint8_t dummy_payload[512] = {0x90};
-
-    if (verify_firmware_signature(&valid_header, dummy_payload)) {
-        printf("[BOOT LOG] Firmware authentication SUCCESS. Jumping to application...\n\n");
-
-        uint32_t heartbeats = 0;
-        while(true) {
-            heartbeats++;
-            printf("[APP] System operating securely. Heartbeat counter: %u\n", heartbeats);
-            sleep_ms(3000);
-        }
-    } else {
-        printf("\n[ALERT] Execution ABORTED. RP2350 entering security lock state.\n");   
-        while (true) {
-            tight_loop_contents();
-        }
-    }
     
+    sleep_ms(1000);
+
+    printf("=========================================\n");
+    printf("  RP2350 Secure Bootloader Initializing  \n");
+    printf("=========================================\n");
+
+    mbedtls_pk_context pk;
+    mbedtls_pk_init(&pk);
+
+    /* 1. Parse DER-encoded Public Key */
+    int ret = mbedtls_pk_parse_public_key(&pk, public_key_h, public_key_h_len);
+    if (ret != 0) {
+        boot_failed_halt("Public Key Parsing Failed", ret);
+    }
+
+    /* 2. Extract ECP/ECDSA context pointer using mbedtls_pk_ec macro */
+    mbedtls_ecdsa_context *ecdsa = mbedtls_pk_ec(pk);
+    if (ecdsa == NULL) {
+        printf("[CRITICAL ERROR] Failed to extract ECDSA context.\n");
+        while (1) { tight_loop_contents(); }
+    }
+
+    /* 3. Verify Signature against Payload Hash */
+    ret = mbedtls_ecdsa_read_signature(
+        ecdsa,
+        payload_hash_bin, sizeof(payload_hash_bin),
+        signature_der, signature_der_len
+    );
+
+    if (ret != 0) {
+        mbedtls_pk_free(&pk);
+        boot_failed_halt("Signature Verification Failed", ret);
+    }
+
+    /* 4. Verification Passed -> Launch Payload */
+    mbedtls_pk_free(&pk);
+    printf("[SECURE BOOT SUCCESS] Signature Verified!\n");
+    printf("[SECURE BOOT] Booting verified firmware payload...\n");
+
+    /* Simulated Firmware Entry Point */
+    while (1) {
+        printf("Running verified firmware payload logic...\n");
+        sleep_ms(2000);
+    }
     return 0;
 }

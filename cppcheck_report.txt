@@ -1,0 +1,35 @@
+main.c:1:2: information: Include file: <stdio.h> not found. Please note: Standard library headers do not need to be provided to get proper results. [missingIncludeSystem]
+#include <stdio.h>
+ ^
+main.c:2:2: information: Include file: "pico/stdlib.h" not found. [missingInclude]
+#include "pico/stdlib.h"
+ ^
+main.c:5:2: information: Include file: "mbedtls/pk.h" not found. [missingInclude]
+#include "mbedtls/pk.h"
+ ^
+main.c:6:2: information: Include file: "mbedtls/ecdsa.h" not found. [missingInclude]
+#include "mbedtls/ecdsa.h"
+ ^
+main.c:7:2: information: Include file: "mbedtls/error.h" not found. [missingInclude]
+#include "mbedtls/error.h"
+ ^
+public_key.h:3:2: information: Include file: <stddef.h> not found. Please note: Standard library headers do not need to be provided to get proper results. [missingIncludeSystem]
+#include <stddef.h>
+ ^
+public_key.h:4:2: information: Include file: <stdint.h> not found. Please note: Standard library headers do not need to be provided to get proper results. [missingIncludeSystem]
+#include <stdint.h>
+ ^
+signature.h:3:2: information: Include file: <stddef.h> not found. Please note: Standard library headers do not need to be provided to get proper results. [missingIncludeSystem]
+#include <stddef.h>
+ ^
+signature.h:4:2: information: Include file: <stdint.h> not found. Please note: Standard library headers do not need to be provided to get proper results. [missingIncludeSystem]
+#include <stdint.h>
+ ^
+payload.h:3:2: information: Include file: <stddef.h> not found. Please note: Standard library headers do not need to be provided to get proper results. [missingIncludeSystem]
+#include <stddef.h>
+ ^
+payload.h:4:2: information: Include file: <stdint.h> not found. Please note: Standard library headers do not need to be provided to get proper results. [missingIncludeSystem]
+#include <stdint.h>
+ ^
+nofile:0:0: information: Active checkers: 119/186 (use --checkers-report=<filename> to see details) [checkersReport]
+
