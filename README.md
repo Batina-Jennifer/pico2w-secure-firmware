@@ -1,8 +1,7 @@
-# Secure Firmware Update & Automated SBOM Pipeline
+# RP2350 Secure Firmware Update & Automated DevSecOps Pipeline
 
-**Hardware Root of Trust + DevSecOps pipeline for the Raspberry Pi Pico 2 W (RP2350)**
+An automated, CRA-compliant supply chain security pipeline and application-level secure bootloader for the **Raspberry Pi Pico 2 W (RP2350)**.
 
-If it's not signed, it doesn't boot.
 
 ![Status](https://img.shields.io/badge/status-working-brightgreen)
 ![Hardware](https://img.shields.io/badge/hardware-RP2350-blue)
@@ -13,7 +12,7 @@ If it's not signed, it doesn't boot.
 
 This project builds an end-to-end secure firmware deployment pipeline for a Raspberry Pi Pico 2 W, aligned with EU Cyber Resilience Act (CRA) supply chain security requirements.
 
-The board **refuses to run any firmware that isn't cryptographically signed**. Every code push is automatically scanned for vulnerabilities, inventoried into a Software Bill of Materials (SBOM), checked against known CVEs, compiled, and signed — before the binary ever reaches the hardware.
+The board verifies incoming firmware against embedded cryptographic signatures before execution. Every code push is automatically scanned for secrets and code vulnerabilities, inventoried into a Software Bill of Materials (SBOM), audited against known CVEs, compiled, and signed — before the binary ever reaches the hardware.
 
 ## Architecture
 
@@ -23,9 +22,9 @@ DEVELOPMENT & WORKSPACE (LOCAL)
                 │
                 ▼ git push
 DEVSECOPS PIPELINE (GITHUB ACTIONS)
-2. Static Application Security Testing (SAST / Cppcheck)
-3. Automated Software Bill of Materials Generation (Syft)
-4. Vulnerability & Dependency CVE Scanning (Grype)
+2. Secret Scanning (Gitleaks) & Static Analysis (Cppcheck SAST)
+3. Enriched Software Bill of Materials Audit (Syft / CycloneDX)
+4. Vulnerability & Dependency CVE Scanning (Grype & .grype.yaml)
 5. Compile C Source into RP2350 Binary Payload (.uf2)
 6. Generate SHA-256 Digest & Sign Payload with Private Key
                 │
@@ -49,11 +48,12 @@ HARDWARE EXECUTION (PICO 2 W)
 ## Features
 
 - **Real cryptographic verification** — genuine SHA-256 hashing and ECDSA P-256 signature verification on-device via mbedTLS, not simulated
-- **Fail-secure design** — any verification failure halts the board permanently rather than retrying or falling through
-- **Automated SAST** — Cppcheck runs on every push, catching memory/safety issues before compilation
-- **Automated SBOM** — CycloneDX-format Software Bill of Materials generated via Syft on every build
-- **Automated CVE scanning** — Grype cross-references the SBOM against known vulnerability databases
-- **Automated signing & release** — GitHub Actions signs the compiled binary using a private key stored in GitHub Secrets, then publishes a GitHub Release with the signed firmware and all compliance artifacts attached
+- **Fail-secure design** — any verification failure halts the board permanently in a hardware lock loop
+- **Automated Secret Scanning** — Gitleaks audits full repository history on every push to prevent secret leaks
+- **Automated SAST** — Cppcheck enforces C code safety and style standards prior to compilation
+- **Enriched SBOM & CRA Compliance** — Machine-readable CycloneDX `sbom.json` containing explicit PURL/CPE metadata for bare-metal dependencies.
+- **Automated CVE Scanning & Risk Triage** — Grype cross-references the SBOM against vulnerability databases while applying formal risk decisions documented in .grype.yaml.
+- **Automated signing & release** — GitHub Actions signs compiled binaries using OpenSSL keys stored in GitHub Secrets, publishing a GitHub Release with all compliance artifacts attached.
 
 ## Tech Stack
 
@@ -62,8 +62,9 @@ HARDWARE EXECUTION (PICO 2 W)
 | Hardware | Raspberry Pi Pico 2 W (RP2350) |
 | Firmware | C, Pico SDK 2.3.0, mbedTLS |
 | Cryptography | OpenSSL (ECDSA P-256, SHA-256) |
+| Secret Scanning | Gitleaks |
 | SAST | Cppcheck |
-| SBOM | Syft (CycloneDX) |
+| SBOM | Syft (CycloneDX 1.7) |
 | CVE Scanning | Grype |
 | CI/CD | GitHub Actions |
 | Build System | CMake, Ninja, ARM GCC toolchain |
@@ -88,6 +89,30 @@ HARDWARE EXECUTION (PICO 2 W)
 └── .github/workflows/
     └── sec-pipeline.yml        # SAST + SBOM + CVE scan + build + sign + release
 ```
+
+## Security & Supply Chain Audit
+
+### 1. Secret Isolation & Key Management
+- **Zero Local Key Leaks:** Verified via `git log --all -- *.pem` that `ec_private_key.pem` was never tracked or committed to Git history. Only `.gitignore`, `ec_public_key.pem`, and `public_key.h` exist in historical commits.
+- **CI/CD Signing:** Private signing keys are injected strictly at build time via GitHub Secrets (`ECC_PRIVATE_KEY`) and immediately purged from container memory post-signing.
+
+### 2. Software Bill of Materials (SBOM) & Vulnerability Management
+- **Manual Component Enrichment:** Initial automated Syft scans returned empty package sets due to bare-metal C vendoring (Pico SDK and Mbed TLS).
+- **CRA Alignment:** Manually enriched `sbom.json` with explicit Package URLs (`pkg:github/raspberrypi/pico-sdk@2.3.0` and `pkg:github/mbed-tls/mbedtls@3.6.6`) and CPE identifiers (`cpe:2.3:a:arm:mbed_tls:3.6.6:*:*:*:*:*:*:*`) to enable accurate upstream CVE tracking via Grype.
+
+### 3. Vulnerability Triage & Impact Analysis
+- **Identified Finding:** `CVE-2025-66442` (Medium Severity) — LLVM `select-optimize` timing side channel in Mbed TLS RSA and CBC/ECB decryption routines.
+![CVE Identified](</images/new vuln.png>)
+- **Triage Result:** **Not Affected (Unreachable Code / False Positive)**.
+- **Justification:**
+  1. *Primitive Scope:* Firmware uses ECDSA P-256 and SHA-256; RSA and CBC/ECB routines are omitted at compile time.
+  2. *Toolchain:* Build uses `arm-none-eabi-gcc`, avoiding the vulnerable LLVM optimization pass entirely.
+- **Action:** Formally documented risk decision in `.grype.yaml`.
+![CVE Fixed](</images/fixed vuln.png>)
+
+### 4. Architecture Terminology & Verification Boundary
+- **Verification Boundary:** Firmware payload authenticity is validated via application-level C code executing Mbed TLS ECDSA (NIST P-256).
+- **Hardware Root of Trust Note:** This implementation performs software-based signature verification. Achieving a true hardware-enforced Root of Trust on the RP2350 requires provisioning public key hashes directly into One-Time Programmable (OTP) memory to engage the internal boot ROM secure boot flow.
 
 ## Getting Started
 
@@ -162,19 +187,25 @@ The board halts permanently rather than falling through to execution. Restoring 
 
 ## CI/CD Pipeline
 
-Every push to `main` triggers `.github/workflows/sec-pipeline.yml`, running three jobs in sequence:
+Every push to `main` triggers `.github/workflows/sec-pipeline.yml`, executing three gated jobs under a least-privilege security model (`permissions: contents: read`):
 
-1. **SAST + SBOM + CVE Scan** — Cppcheck, Syft, Grype
-2. **Build Firmware & Sign Binary** — compiles via CMake/Ninja, signs with the private key from GitHub Secrets
-3. **Create GitHub Release** — publishes the signed `.uf2`, `sbom.json`, `cppcheck_report.txt`, and `firmware_signature.der` as release assets
+1. **SAST + Secret Scan + SBOM Triage:**
+   - **Gitleaks:** Scans full repository history to prevent accidental secret or key exposure.
+   - **Cppcheck:** Enforces C code quality and style standards (`--error-exitcode=1`).
+   - **Syft & Grype:** Evaluates the enriched `sbom.json` against NVD vulnerability databases and enforces the build gate (`--fail-on medium`) while respecting triage rules in `.grype.yaml`.
+2. **Build Firmware & Sign Binary:**
+   - Compiles the application via CMake/Ninja using `-DPICO_NO_PICOTOOL=1 -DSKIP_PICOTOOL_BUILD=1` to bypass Windows toolchain regressions.
+   - Injects `ECC_PRIVATE_KEY` from GitHub Secrets to derive header signatures (`signature.der`) and immediately purges the private key from container disk memory.
+3. **Create GitHub Release (`contents: write` scoped):**
+   - Publishes the compiled `.uf2` binary, `signature.der`, enriched `sbom.json`, `.grype.yaml` triage record, and `cppcheck_report.txt` directly to the GitHub Releases page.
 
 See the [Releases](../../releases) page for signed builds and their attached compliance artifacts.
 
 ## Known Limitations
 
-- **SBOM auto-detection** — Syft's scanners rely on package manifests (e.g. `package.json`, `requirements.txt`); this project vendors dependencies via the Pico SDK's CMake `FetchContent` mechanism, which isn't auto-detected (0 packages found when scoped to source only). Vendored components (Pico SDK 2.3.0, mbedTLS) are manually documented in `sbom_manual_notes.md` instead.
-- **Single-stage verification** — the bootloader verifies an embedded payload rather than chain-loading into a separately flashed application at a distinct flash offset. True two-stage secure boot (flash partitioning + vector table relocation) is a natural next step, not yet implemented.
-- **picotool 2.3.0 Windows regression** — `.uf2` generation on Windows requires either `-DPICO_NO_PICOTOOL=1` (skips auto-generation) plus a manual conversion using picotool 2.2.0-a4, or an equivalent workaround, until upstream fixes the crash.
+- **Bare-Metal C SBOM Enrichment** — Automated Syft scans on bare-metal C repositories return empty component sets due to the absence of standard package manifests. Dependencies (Pico SDK v2.3.0 and Mbed TLS v3.6.6) are explicitly enriched with Package URLs (`purl`) and CPEs directly in `sbom.json` to enable accurate upstream vulnerability tracking.
+- **Application-Level Firmware Verification** — The bootloader performs cryptographic signature verification on an embedded payload within C code. True hardware-enforced secure boot on the RP2350 requires provisioning public key hashes into One-Time Programmable (OTP) memory to engage the internal boot ROM.
+- **picotool Windows Build Regression** — The build pipeline configures CMake with `-DPICO_NO_PICOTOOL=1 -DSKIP_PICOTOOL_BUILD=1` to bypass `picotool.exe coprodis` segmentation faults (`0xC0000005`) observed on Windows host toolchains.
 
 ## Author
 

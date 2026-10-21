@@ -1,8 +1,15 @@
+# .grype.yaml
+# Anchore Grype Vulnerability Scan Configuration & Risk Triage
+
 ignore:
-- vulnerability: CVE-2025-66442
-package: 
-name: mbedtls
-version: 3.6.6
-fix-state: not-fixed
-reason: >
-Assessed on 2026-10-21. CVE-2025-66442 is an LLVM select-optimise timing side channel affecting RSA and CBC/ECB decryption. Unaffected: 1) The firmware uses ECDSA P-256 (not RSA/CBC/ECB), and 2) Compilation uses arm-none-eabi-gcc, not LLVM.
+  - vulnerability: CVE-2025-66442
+    package:
+      name: mbedtls
+      version: 3.6.6
+    fix-state: not-fixed
+    reason: >
+      Assessed on 2026-10-21. CVE-2025-66442 is an LLVM select-optimize timing side channel
+      affecting RSA and CBC/ECB decryption routines.
+      Unaffected / False Positive for this target build:
+      1) Firmware exclusively uses ECDSA P-256 and SHA-256 primitives (RSA and CBC/ECB are uncompiled).
+      2) Build toolchain is arm-none-eabi-gcc, which does not invoke LLVM optimization passes.
