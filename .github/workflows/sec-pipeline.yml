@@ -1,55 +1,59 @@
-name: Secure Firmware Pipeline
+name: DevSecOps Firmware & CRA Pipeline
 
-# Runs on every push to main, and on every pull request targeting main.
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
 
+# Least privilege: default to read-only for all jobs
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   security-checks:
-    name: SAST + SBOM + CVE Scan
+    name: SAST + Secret Scan + SBOM Triage
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Required for Gitleaks to scan historical commits
+
+      - name: Step 0 - Secret Scanning (Gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Cppcheck
         run: sudo apt-get update && sudo apt-get install -y cppcheck
 
-      - name: Run SAST (Cppcheck)
+      - name: Step 1 - Run SAST (Cppcheck)
         run: |
-          cppcheck --enable=all --inconclusive --std=c11 main.c 2> cppcheck_report.txt
+          echo "=== [SAST] Running Cppcheck on Firmware Source ==="
+          cppcheck --enable=warning,style,performance,portability --error-exitcode=1 main.c 2> cppcheck_report.txt
           cat cppcheck_report.txt
 
-      - name: Install Syft
-        run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+      - name: Install Syft & Grype
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
 
-      - name: Generate SBOM (Syft)
-        run: syft dir:. --exclude './build/**' --exclude './.git/**' -o cyclonedx-json=sbom.json
+      - name: Step 2 - Verify Enriched SBOM & Run Vulnerability Gate
+        run: |
+          echo "=== [CRA COMPLIANCE] Scanning Enriched SBOM with Grype ==="
+          # Evaluates enriched sbom.json against NVD and respects triage rules in .grype.yaml
+          grype sbom:sbom.json --fail-on medium
 
-      - name: Install Grype
-        run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
-
-      - name: Scan SBOM for CVEs (Grype)
-        run: grype sbom:sbom.json --fail-on medium || true
-        # NOTE: --fail-on medium would normally fail the build on medium+
-        # severity CVEs. The `|| true` is here temporarily so the pipeline
-        # doesn't block on findings while you're still building this out —
-        # remove `|| true` once you want CVEs to actually gate the build.
-
-      - name: Upload security artifacts
+      - name: Upload Security Reports
         uses: actions/upload-artifact@v4
         with:
           name: security-reports
           path: |
             cppcheck_report.txt
             sbom.json
-            sbom_manual_notes.md
+            .grype.yaml
+            README.md
 
   build-and-sign:
     name: Build Firmware & Sign Binary
@@ -58,95 +62,98 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
 
-      - name: Install ARM GCC toolchain and build tools
+      - name: Install ARM GCC Toolchain & Build Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build gcc-arm-none-eabi libnewlib-arm-none-eabi build-essential
+          sudo apt-get install -y cmake ninja-build gcc-arm-none-eabi libnewlib-arm-none-eabi build-essential xxd
 
-      - name: Configure CMake
+      - name: Step 3 - Import Private Key & Automated Signing
+        env:
+          ECC_KEY_DATA: ${{ secrets.ECC_PRIVATE_KEY }}
         run: |
-          mkdir -p build
-          cd build
-          cmake -G Ninja -DPICO_SDK_FETCH_FROM_GIT=ON ..
+          echo "=== [SIGNING] Importing Private Key from GitHub Secrets ==="
+          echo "$ECC_KEY_DATA" > ec_private_key.pem
 
-      - name: Build firmware
+          # Compute hashes and sign firmware payload
+          openssl pkey -pubin -in ec_public_key.pem -outform DER -out ec_public_key.der
+          openssl dgst -sha256 -binary -out payload_hash.bin firmware_payload.bin
+          openssl dgst -sha256 -sign ec_private_key.pem -out signature.der firmware_payload.bin
+
+          # Regenerate C headers for bootloader inclusion
+          echo -e "#ifndef PUBLIC_KEY_H\n#define PUBLIC_KEY_H\n#include <stddef.h>\n#include <stdint.h>" > public_key.h
+          xxd -i ec_public_key.der | sed 's/ec_public_key_der/public_key_h/g' >> public_key.h
+          echo "#endif" >> public_key.h
+
+          echo -e "#ifndef PAYLOAD_H\n#define PAYLOAD_H\n#include <stddef.h>\n#include <stdint.h>" > payload.h
+          xxd -i payload_hash.bin | sed 's/payload_hash_bin/payload_hash_bin/g' >> payload.h
+          echo "#endif" >> payload.h
+
+          echo -e "#ifndef SIGNATURE_H\n#define SIGNATURE_H\n#include <stddef.h>\n#include <stdint.h>" > signature.h
+          xxd -i signature.der | sed 's/signature_der/signature_der/g' >> signature.h
+          echo "#endif" >> signature.h
+
+          # Immediately purge private key from runner disk
+          rm -f ec_private_key.pem
+
+      - name: Step 4 - Set up Pico SDK & Build Binary
         run: |
-          cd build
+          git clone --recurse-submodules https://github.com/raspberrypi/pico-sdk.git $HOME/pico-sdk
+          export PICO_SDK_PATH=$HOME/pico-sdk
+          mkdir -p build && cd build
+          cmake -DPICO_NO_PICOTOOL=1 -DSKIP_PICOTOOL_BUILD=1 -DPICO_SDK_PATH=$HOME/pico-sdk -G Ninja ..
           ninja
 
-      - name: Locate build output
-        id: find_uf2
-        run: |
-          UF2_PATH=$(find build -name "*.uf2" | head -n 1)
-          echo "Found UF2: $UF2_PATH"
-          echo "uf2_path=$UF2_PATH" >> "$GITHUB_OUTPUT"
-
-      - name: Sign the compiled binary
-        env:
-          FIRMWARE_SIGNING_KEY: ${{ secrets.FIRMWARE_SIGNING_KEY }}
-        run: |
-          echo "$FIRMWARE_SIGNING_KEY" > private_key.pem
-          UF2_PATH="${{ steps.find_uf2.outputs.uf2_path }}"
-
-          # Compute SHA-256 digest of the built binary
-          openssl dgst -sha256 -binary "$UF2_PATH" > payload_digest.bin
-
-          # Sign the digest with the private key -> DER-encoded ECDSA signature
-          openssl pkeyutl -sign \
-            -inkey private_key.pem \
-            -pkeyopt digest:sha256 \
-            -in payload_digest.bin \
-            -out firmware_signature.der
-
-          echo "Signature generated:"
-          xxd firmware_signature.der | head -5
-
-          # Never leave the private key on disk in the runner
-          rm -f private_key.pem
-
-      - name: Upload signed firmware artifacts
+      - name: Upload Signed Firmware Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: signed-firmware
           path: |
             build/**/*.uf2
-            firmware_signature.der
-            payload_digest.bin
+            signature.der
+            payload_hash.bin
 
   release:
     name: Create GitHub Release
     needs: build-and-sign
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # Scope write permission strictly to the release job
+    permissions:
+      contents: write
     steps:
-      - name: Download signed firmware
+      - name: Download Signed Firmware
         uses: actions/download-artifact@v4
         with:
           name: signed-firmware
           path: release-files
 
-      - name: Download security reports
+      - name: Download Security Reports
         uses: actions/download-artifact@v4
         with:
           name: security-reports
           path: release-files
 
-      - name: Create release
+      - name: Step 5 - Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: "Firmware Build ${{ github.run_number }}"
+          name: "Firmware Release v${{ github.run_number }}"
           files: |
             release-files/**/*.uf2
-            release-files/firmware_signature.der
+            release-files/signature.der
             release-files/sbom.json
+            release-files/.grype.yaml
             release-files/cppcheck_report.txt
           body: |
-            Automated build from commit ${{ github.sha }}.
+            Automated CRA-compliant DevSecOps build from commit `${{ github.sha }}`.
 
-            - SAST scan: see cppcheck_report.txt
-            - SBOM (CycloneDX): see sbom.json
-            - Firmware signed with ECDSA P-256 (signature: firmware_signature.der)
+            ### Security Audit Summary
+            - **SAST:** Cppcheck static code analysis completed (see `cppcheck_report.txt`).
+            - **Secret Scan:** Clean scan executed via Gitleaks.
+            - **SBOM & CVE Triage:** Enriched CycloneDX 1.7 inventory audited with Grype. Evaluated findings (e.g. `CVE-2025-66442`) triaged in `.grype.yaml`.
+            - **Firmware Signing:** ECDSA P-256 signature generated (`signature.der`).
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

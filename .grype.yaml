@@ -1,0 +1,8 @@
+ignore:
+- vulnerability: CVE-2025-66442
+package: 
+name: mbedtls
+version: 3.6.6
+fix-state: not-fixed
+reason: >
+Assessed on 2026-10-21. CVE-2025-66442 is an LLVM select-optimise timing side channel affecting RSA and CBC/ECB decryption. Unaffected: 1) The firmware uses ECDSA P-256 (not RSA/CBC/ECB), and 2) Compilation uses arm-none-eabi-gcc, not LLVM.

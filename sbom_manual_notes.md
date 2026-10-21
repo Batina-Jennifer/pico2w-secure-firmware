@@ -1,20 +1,20 @@
-# Manually-Supplemented SBOM Components
+# Manually-Supplemented SBOM Components & Supply Chain Audit Trail
 
-Automated scanning (Syft, CycloneDX output) found 0 auto-detectable
-packages when scoped to source only (excluding build/). This is a known
-limitation: Syft's scanners rely on package manifests (package.json,
-requirements.txt, etc.), and this project vendors its dependencies via the
-Pico SDK's CMake FetchContent mechanism rather than a package manager
-Syft recognizes.
+## 1. Automated Detection Limitation
+Automated scanning via Syft (`cyclonedx-json`) initially found 0 auto-detectable 
+packages when scoped to source files. This is a known industry limitation for 
+embedded systems: Syft relies on high-level package manifests (`package.json`, 
+`requirements.txt`), whereas this project vendors bare-metal C dependencies 
+via the Pico SDK's CMake FetchContent mechanism.
 
-The following components are manually declared based on the actual vendored
-source used in this build:
+## 2. Enriched Component Inventory
+To achieve Cyber Resilience Act (CRA) compliance and enable automated CVE tracking via Grype, 
+the primary `sbom.json` was manually enriched with explicit Package URLs (PURLs) and CPE identifiers:
 
-| Component | Version / Commit | Source |
+| Component | Version / Commit | PURL / CPE Identifier |
 |---|---|---|
-| Raspberry Pi Pico SDK | 2.3.0 | https://github.com/raspberrypi/pico-sdk |
-| mbedTLS (via Pico SDK) | 82418f42a1bc7db94ea81f603e05f0061b553c40 | lib/mbedtls submodule |
+| Raspberry Pi Pico SDK | 2.3.0 | `pkg:github/raspberrypi/pico-sdk@2.3.0` |
+| Mbed TLS (via Pico SDK) | 3.6.6 (`82418f4`) | `pkg:github/mbed-tls/mbedtls@3.6.6`<br>`cpe:2.3:a:arm:mbed_tls:3.6.6:*:*:*:*:*:*:*` |
 
-This gap and the manual supplementation is a realistic reflection of
-current SBOM tooling limitations for embedded/vendored C dependencies,
-distinct from ecosystems with native package managers (npm, pip, cargo).
+## 3. Vulnerability Triage
+With CPE identifiers mapped, automated scans using Grype evaluate upstream security advisories on every CI/CD run. Identified findings (such as `CVE-2025-66442`) are formally assessed and triaged in `.grype.yaml`.
