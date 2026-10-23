@@ -1,11 +1,6 @@
 # .grype.yaml
-# Anchore Grype Vulnerability Scan Configuration & Risk Triage
-
 ignore:
   - vulnerability: CVE-2025-66442
-    reason: >
-      Assessed on 2026-10-21. CVE-2025-66442 is an LLVM select-optimize timing side channel
-      affecting RSA and CBC/ECB decryption routines.
-      Unaffected / False Positive for this target build:
-      1) Firmware exclusively uses ECDSA P-256 and SHA-256 primitives (RSA and CBC/ECB are uncompiled).
-      2) Build toolchain is arm-none-eabi-gcc, which does not invoke LLVM optimization passes.
+    package:
+      name: mbedtls
+    reason: "False positive: Unused RSA/CBC routines & arm-none-eabi-gcc toolchain."

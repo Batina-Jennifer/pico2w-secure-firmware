@@ -42,8 +42,10 @@ jobs:
       - name: Step 2 - Verify Enriched SBOM & Run Vulnerability Gate
         run: |
           echo "=== [CRA COMPLIANCE] Scanning Enriched SBOM with Grype ==="
-          # Evaluates enriched sbom.json against NVD and respects triage rules in .grype.yaml
+          pwd
+          ls -la sbom.json .grype.yaml
           grype sbom:sbom.json --fail-on medium -c .grype.yaml
+          # Evaluates enriched sbom.json against NVD and respects triage rules in .grype.yaml
 
       - name: Upload Security Reports
         uses: actions/upload-artifact@v4
