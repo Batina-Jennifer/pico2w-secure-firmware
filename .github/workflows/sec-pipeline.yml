@@ -123,7 +123,7 @@ jobs:
             signature.der
             payload_hash.bin
 
-  release:
+release:
     name: Create GitHub Release
     needs: build-and-sign
     runs-on: ubuntu-latest
@@ -141,7 +141,8 @@ jobs:
       - name: Download Security Reports
         uses: actions/download-artifact@v4
         with:
-          name: release-files
+          name: security-reports
+          path: release-files
 
       - name: Step 5 - Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -160,7 +161,7 @@ jobs:
             ### Security Audit Summary
             - **SAST:** Cppcheck static code analysis completed (see `cppcheck_report.txt`).
             - **Secret Scan:** Clean scan executed via Gitleaks.
-            - **SBOM & CVE Triage:** Enriched CycloneDX 1.7 inventory audited with Grype. Evaluated findings (e.g. `CVE-2025-66442`) triaged in `.grype.yaml`.
+            - **SBOM & CVE Triage:** Enriched CycloneDX inventory audited with Grype. Evaluated findings (e.g. `CVE-2025-66442`) triaged in `.grype.yaml`.
             - **Firmware Signing:** ECDSA P-256 signature generated (`signature.der`).
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
