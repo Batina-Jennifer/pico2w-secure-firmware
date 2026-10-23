@@ -57,7 +57,7 @@ jobs:
             .grype.yaml
             README.md
 
-build-and-sign:
+  build-and-sign:
     name: Build Firmware & Sign Binary
     needs: security-checks
     runs-on: ubuntu-latest
@@ -141,8 +141,7 @@ build-and-sign:
       - name: Download Security Reports
         uses: actions/download-artifact@v4
         with:
-          name: security-reports
-          path: release-files
+          name: release-files
 
       - name: Step 5 - Create GitHub Release
         uses: softprops/action-gh-release@v2
