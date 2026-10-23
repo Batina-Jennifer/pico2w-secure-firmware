@@ -43,7 +43,7 @@ jobs:
         run: |
           echo "=== [CRA COMPLIANCE] Scanning Enriched SBOM with Grype ==="
           # Evaluates enriched sbom.json against NVD and respects triage rules in .grype.yaml
-          grype sbom:sbom.json --fail-on medium
+          grype sbom:sbom.json --fail-on medium -c .grype.yaml
 
       - name: Upload Security Reports
         uses: actions/upload-artifact@v4
