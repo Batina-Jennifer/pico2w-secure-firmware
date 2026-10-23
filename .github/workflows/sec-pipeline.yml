@@ -57,7 +57,7 @@ jobs:
             .grype.yaml
             README.md
 
-  build-and-sign:
+build-and-sign:
     name: Build Firmware & Sign Binary
     needs: security-checks
     runs-on: ubuntu-latest
@@ -72,12 +72,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build gcc-arm-none-eabi libnewlib-arm-none-eabi build-essential xxd
 
-      - name: Step 3 - Import Private Key & Automated Signing
+      - name: Step 3 - Set up Pico SDK & Build Binary
+        run: |
+          git clone --recurse-submodules https://github.com/raspberrypi/pico-sdk.git $HOME/pico-sdk
+          export PICO_SDK_PATH=$HOME/pico-sdk
+          mkdir -p build && cd build
+          cmake -DPICO_NO_PICOTOOL=1 -DSKIP_PICOTOOL_BUILD=1 -DPICO_SDK_PATH=$HOME/pico-sdk -G Ninja ..
+          ninja
+
+      - name: Step 4 - Import Private Key & Automated Signing
         env:
           ECC_KEY_DATA: ${{ secrets.ECC_PRIVATE_KEY }}
         run: |
           echo "=== [SIGNING] Importing Private Key from GitHub Secrets ==="
           echo "$ECC_KEY_DATA" > ec_private_key.pem
+
+          # Verify firmware payload exists from build output
+          if [ ! -f firmware_payload.bin ]; then
+            echo "Error: firmware_payload.bin not found in workspace!"
+            exit 1
+          fi
 
           # Compute hashes and sign firmware payload
           openssl pkey -pubin -in ec_public_key.pem -outform DER -out ec_public_key.der
@@ -99,14 +113,6 @@ jobs:
 
           # Immediately purge private key from runner disk
           rm -f ec_private_key.pem
-
-      - name: Step 4 - Set up Pico SDK & Build Binary
-        run: |
-          git clone --recurse-submodules https://github.com/raspberrypi/pico-sdk.git $HOME/pico-sdk
-          export PICO_SDK_PATH=$HOME/pico-sdk
-          mkdir -p build && cd build
-          cmake -DPICO_NO_PICOTOOL=1 -DSKIP_PICOTOOL_BUILD=1 -DPICO_SDK_PATH=$HOME/pico-sdk -G Ninja ..
-          ninja
 
       - name: Upload Signed Firmware Artifacts
         uses: actions/upload-artifact@v4
