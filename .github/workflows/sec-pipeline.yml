@@ -150,11 +150,13 @@ jobs:
           tag_name: build-${{ github.run_number }}
           name: "Firmware Release v${{ github.run_number }}"
           files: |
+            release-files/*.uf2
             release-files/**/*.uf2
             release-files/signature.der
-            release-files/sbom.json
-            release-files/.grype.yaml
-            release-files/cppcheck_report.txt
+            release-files/payload_hash.bin
+            sbom.json
+            .grype.yaml
+            cppcheck_report.txt
           body: |
             Automated CRA-compliant DevSecOps build from commit `${{ github.sha }}`.
 
