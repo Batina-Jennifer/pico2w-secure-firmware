@@ -82,7 +82,7 @@ build-and-sign:
 
       - name: Step 4 - Import Private Key & Automated Signing
         env:
-          ECC_KEY_DATA: ${{ secrets.ECC_PRIVATE_KEY }}
+          ECC_KEY_DATA: ${{ secrets.FIRMWARE_SIGNING_KEY }}
         run: |
           echo "=== [SIGNING] Importing Private Key from GitHub Secrets ==="
           echo "$ECC_KEY_DATA" > ec_private_key.pem
